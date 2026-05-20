@@ -1,3 +1,4 @@
+require 'cgi'
 require 'faraday'
 require 'faraday_middleware'
 require "addressable/uri"
@@ -132,10 +133,6 @@ module RubyJsonApiClient
       port = uri.port || @port || (@secure ? 443 : 80)
       path = uri.path
 
-      query_params = (required_query_params || {})
-        .merge(uri.query_values || {})
-        .merge(params)
-
       conn = Faraday.new("#{proto}://#{hostname}:#{port}", {
         headers: headers
       }) do |f|
@@ -143,7 +140,28 @@ module RubyJsonApiClient
         f.adapter @http_client
       end
 
-      response = conn.send(method, path, query_params)
+      if [:get, :delete].include?(method)
+        params_pairs = params.respond_to?(:to_unsafe_h) ? params.to_unsafe_h.to_a : params.to_a
+
+        all_params = (uri.query_values(Array) || []) +
+          (required_query_params || {}).to_a +
+          params_pairs
+
+        query_string = all_params.map { |k, v| "#{CGI.escape(k.to_s)}=#{CGI.escape(v.to_s)}" }.join("&")
+        full_path = query_string.empty? ? path : "#{path}?#{query_string}"
+
+        response = conn.send(method, full_path)
+      else
+        # For POST/PUT/PATCH, params is the request body. Required query
+        # params (e.g. auth token) still need to go on the URL.
+        uri_params = uri.query_values(Array) || []
+        all_query = uri_params + (required_query_params || {}).to_a
+        query_string = all_query.map { |k, v| "#{CGI.escape(k.to_s)}=#{CGI.escape(v.to_s)}" }.join("&")
+        full_path = query_string.empty? ? path : "#{path}?#{query_string}"
+
+        response = conn.send(method, full_path, params)
+      end
+
       [response.status, response.headers, response.body]
     end
   end
